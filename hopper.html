@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			html, body {
+				width: 100%;
+				height: 100%;
+			}
+
+			body {
+				background-color: #ffffff;
+				margin: 0;
+				overflow: hidden;
+				font-family: arial;
+			}
+
+			#blocker {
+
+				position: absolute;
+
+				width: 100%;
+				height: 100%;
+
+				background-color: rgba(0,0,0,0.5);
+
+			}
+
+			#instructions {
+
+				width: 100%;
+				height: 100%;
+
+				display: -webkit-box;
+				display: -moz-box;
+				display: box;
+
+				-webkit-box-orient: horizontal;
+				-moz-box-orient: horizontal;
+				box-orient: horizontal;
+
+				-webkit-box-pack: center;
+				-moz-box-pack: center;
+				box-pack: center;
+
+				-webkit-box-align: center;
+				-moz-box-align: center;
+				box-align: center;
+
+				color: #ffffff;
+				text-align: center;
+
+				cursor: pointer;
+			}
+
+			#score {
+				font-size: 60px;
+				position: absolute;
+				margin-top: 20px;
+				margin-left: 20px;
+				font-family: "Verdana";
+			}
+
+
+		</style>
+
+	</head>
+	<body style="margin:0;padding:0">		
+
+		<div id="blocker">
+
+			<div id="instructions">
+				<span style="font-size:40px">Press SPACE to play</span>
+				<br />
+				(A, S, D = Move, SPACE = Jump, HOLD MOUSE = Look around)
+
+			</div>
+		</div>
+
+		<div id="score"/>
+
+		<script src="three.js"></script>
+
+		<script>
+		/////////
+			var targetRotationX = 0;
+			var targetRotationY = 0;
+			var targetRotationOnMouseDownX = 0;
+			var targetRotationOnMouseDownY = 0;
+
+			var mouseX = 0;
+			var mouseXOnMouseDown = 0;
+			var mouseY = 0;
+			var mouseYOnMouseDown = 0;
+
+			var windowHalfX = window.innerWidth / 2;
+			var windowHalfY = window.innerHeight / 2;
+		/////////
+
+		var INV_MAX_FPS = 1 / 60;
+		var delta = 0;
+		var clock = new THREE.Clock()
+
+		var score = 0;
+
+		var camera;
+		var renderer;
+		var scene;
+		var player;
+		var isDead = false;
+
+		var collision = false;
+		var onLog = [];
+		onLog[0] = false;
+
+		var TILELIMIT = 31;
+		var TILEWIDTH = 50;
+		var HEIGHT = window.innerHeight;
+		var WIDTH = 850;
+
+		var TYPES = ['GRASS', 'ROAD', 'WATER'];
+
+		var tiles = [];
+		var obstacles = [];
+
+		init();
+		animate();
+
+		function init(){
+			scene = new THREE.Scene();
+			camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 10000);
+			
+			
+			camera.position.x = 0;
+			camera.position.y = -100;
+			camera.position.z = 300;
+
+			scene.rotation.x = -0.86;
+			scene.rotation.y = 0.54;
+
+			renderer = new THREE.WebGLRenderer({antialias: true});
+			renderer.setClearColor( 0xf0f0f0 );
+			renderer.setSize(window.innerWidth, window.innerHeight);
+
+
+			var light = new THREE.DirectionalLight( 0xffffff, 1 );
+			light.position.set( 1, 1, 1 ).normalize();
+			light.castShadow = true;
+			scene.add( light );
+
+			document.body.appendChild(renderer.domElement);
+			document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+			document.addEventListener( 'keydown', onKeyDown, false );
+			
+			initWorld();
+
+		}
+
+		function addTile(tile = new Tile(tiles.length)){
+
+			if (tiles.length != 0){
+				if (tiles.length >= TILELIMIT){
+					scene.remove(tiles[0].mesh);
+					tiles.shift();
+
+					for (var i = 0; i < tiles.length; i++){
+						tiles[i].mesh.position.y -= TILEWIDTH;
+					}
+
+					tile.mesh.position.y = tiles[tiles.length - 1].mesh.position.y + TILEWIDTH;
+
+				}else{
+
+					for (var i = 0; i < tiles.length; i++){
+						tiles[i].mesh.position.y -= TILEWIDTH/2;
+					}
+
+					tile.mesh.position.y = tiles[tiles.length - 1].mesh.position.y + TILEWIDTH;
+				}
+
+			}
+
+			scene.add(tile.mesh);
+			tiles.push(tile);
+
+		}
+
+		function initStartTiles(){
+
+			//FIRST TWO ROWS
+			for (var i = 0; i < TILELIMIT/2 - 2; i++){
+
+				var tile = new Tile(tiles.length, 0);
+
+				for (var j = 0; j < WIDTH/TILEWIDTH; j++){
+					
+					tile.addTree(j);
+
+				}
+
+				addTile(tile);
+			}
+			
+			for (var i = 0; i < 5; i++){
+
+			var tile = new Tile(tiles.length, 0);
+
+				for (var j = 0; j < WIDTH/TILEWIDTH; j++){
+
+					if (j <= Math.floor(WIDTH/TILEWIDTH/2 - 3) || j >= Math.ceil(WIDTH/TILEWIDTH/2 + 2)){
+						tile.addTree(j);
+
+					}
+
+				}
+				addTile(tile);
+			}
+
+			var tile = new Tile(tiles.length, 1)
+			addTile(tile);
+
+		}
+
+
+		function Tile(position = tiles.length, type = -1){
+
+			this.mesh = new THREE.Object3D();
+			this.trees = [];
+			this.cars = [];
+			this.logs = [];
+			this.height = 0;
+			this.position = position;
+			this.direction = Math.floor(Math.random() * 10) % 2;
+
+			this.carClock = new THREE.Clock();
+			this.logClock = new THREE.Clock();
+
+			if (type == -1){
+				n = Math.floor(Math.random() * (2 - 0 + 1)) + 0;
+			}else{
+				n = type;
+			}
+			 switch(n){
+		        case 0:
+					this.type = 'GRASS';
+					var c = 0x188b06;
+					this.height = 20;
+		            break;
+		        case 1:
+					this.type = 'ROAD';
+					var c = 0x334d5c;
+					this.height = 15;
+		            break;
+		        case 2:
+					this.type = 'WATER';
+					var c = 0x1e5ad6;
+					this.height = 10;
+		            break;
+		    	}
+
+			var geometry = new THREE.BoxGeometry(WIDTH, TILEWIDTH, this.height);
+			var material = new THREE.MeshPhongMaterial( {color: c} );
+
+			tile = new THREE.Mesh(geometry, material);
+
+			this.mesh.add(tile);
+			this.mesh.position.z += this.height/2;
+
+
+			this.addTree = function(treePos = -1){
+				
+				if (treePos == -1){
+
+					n = Math.floor(Math.random() * (5 - 2 + 1)) + 2;
+
+					for (var i = 0; i < n; i++){
+
+						//Position of tree on the tile
+						treePos = Math.floor(Math.random() * (WIDTH/TILEWIDTH - 1 - 0 + 1)) + 0;
+
+
+						tree = new Tree();
+						tree.mesh.position.x = treePos * TILEWIDTH + TILEWIDTH/2 - WIDTH/2;
+
+						this.mesh.add(tree.mesh);
+						this.trees[treePos] = true;
+						//obstacles.push(tree);
+					}
+				}else{
+
+					tree = new Tree();
+					tree.mesh.position.x = treePos * TILEWIDTH + TILEWIDTH/2 - WIDTH/2;
+
+					this.mesh.add(tree.mesh);
+					this.trees[treePos] = true;
+
+				}
+			}
+
+			this.addCar = function(direction = -1){
+
+				this.isTimeElapsed = 1;
+				this.carClock.start();
+
+				this.timeToNextCar = Math.floor(Math.random() * (5 - 2 + 1)) + 2;
+
+				car = new Car(this.direction);
+				car.position = this.position;
+
+				if (tiles[this.position - 1].type == 'ROAD' && direction == -1){
+
+					car = new Car((tiles[this.position - 1].direction + 1) % 2);
+					this.direction = (tiles[this.position - 1].direction + 1) % 2;
+
+				}
+				
+
+				this.mesh.add(car.mesh);
+				this.cars.push(car);
+				obstacles.push(car);
+
+			}
+
+
+			this.addLog = function(direction = -1){
+
+				this.isTimeElapsed = 1;
+				this.logClock.start();
+
+				this.timeToNextLog = Math.floor(Math.random() * (7 - 3 + 1)) + 3;
+
+				log = new Log(this.direction);
+				log.position = this.position;
+
+				if (tiles[this.position - 1].type == 'WATER' && direction == -1){
+
+					log = new Log((tiles[this.position - 1].direction + 1) % 2);
+					this.direction = (tiles[this.position - 1].direction + 1) % 2;
+
+				}
+				
+
+				this.mesh.add(log.mesh);
+				this.logs.push(log);
+
+			}
+
+
+			this.update = function(){
+
+
+				if (this.type == 'WATER'){
+					if (this.logClock.getElapsedTime() >= this.timeToNextLog){
+						this.addLog(this.direction);
+						this.logClock.start();
+					}
+
+					for (var i = 0; i < this.logs.length; i++){
+
+						this.logs[i].update();
+
+						if (this.logs[i].mesh.position.x > WIDTH/2 || this.logs[i].mesh.position.x < -WIDTH/2){
+							this.mesh.remove(this.logs[i].mesh);
+							this.logs.splice(i, 1);
+
+						}
+					}
+				}
+				if (this.type == 'ROAD'){
+					if (this.carClock.getElapsedTime() >= this.timeToNextCar){
+						this.addCar(this.direction);
+						this.carClock.start();
+					}
+
+					for (var i = 0; i < this.cars.length; i++){
+
+						if (this.cars[i].mesh.position.x > WIDTH/2 || this.cars[i].mesh.position.x < -WIDTH/2){
+							this.mesh.remove(this.cars[i].mesh);
+							this.cars.splice(i, 1);
+
+						}
+					}
+				}
+			}
+
+			if (this.type == 'GRASS' && type == -1){
+				this.addTree();
+			}
+
+
+			if (this.type == 'ROAD'){
+				this.addCar();
+			}
+
+			if (this.type == 'WATER'){
+				this.addLog();
+			}
+
+		}
+
+
+		function Tree(){
+
+			this.mesh = new THREE.Object3D();
+
+			//this.boundingBox = new THREE.Box3(new THREE.Vector3(TILEWIDTH, TILEWIDTH, TILEWIDTH));
+
+			var geometry = new THREE.BoxGeometry(20, 20, 40);
+			var material = new THREE.MeshPhongMaterial( {color: 0x994920} );
+			
+			var trunk = new THREE.Mesh(geometry, material);
+
+			this.mesh.add(trunk);
+
+
+			geometry = new THREE.BoxGeometry(40, 40, 30);
+			material = new THREE.MeshPhongMaterial( {color: 0x23b22d} );
+			var n = Math.floor(Math.random() * (2 - 1 + 1)) + 1;
+
+			for (var i = 1; i <= n; i++){
+
+				var leafs = new THREE.Mesh(geometry, material);
+				leafs.position.z += trunk.geometry.parameters.height + (i - 1) * 30;
+
+				this.mesh.add(leafs);
+
+			}
+
+			this.mesh.position.z += 30;
+			this.boundingBox = new THREE.Box3().setFromObject(this.mesh);
+
+			this.update = function(){
+				this.boundingBox.setFromObject(this.mesh);
+			}
+		}
+
+
+		function Car(direction){
+			//DIRECTION 0 IS LEFT
+			//DIRECTION 1 IS RIGHT
+			//this.boundingBox = new THREE.Box3(new THREE.Vector3(TILEWIDTH/2, TILEWIDTH/2, TILEWIDTH/2));
+			this.position;
+
+			var geometry = new THREE.BoxGeometry(50, 40, 20);
+			var material = new THREE.MeshPhongMaterial( {color: 0x74bdb7} );
+
+			this.mesh = new THREE.Mesh(geometry, material);
+			this.mesh.position.z += 30 - 20/2;
+
+			if (direction == 0){
+				this.mesh.position.x += WIDTH/2;
+			}else{
+				this.mesh.position.x -= WIDTH/2;
+			}
+
+			this.boundingBox = new THREE.Box3().setFromObject(this.mesh);
+
+			this.update = function(){
+				if (direction == 0){
+					this.mesh.position.x -= INV_MAX_FPS * 100;
+				}else{	
+					this.mesh.position.x += INV_MAX_FPS * 100;
+				}
+				this.boundingBox.setFromObject(this.mesh);
+
+			}
+
+		}
+
+		function Log(direction){
+
+			this.direction;
+
+			var length = (Math.floor(Math.random() * (3 - 1 + 1)) + 1) % 3;
+
+			switch(length){
+				case 0:
+					length = 50;
+					break;
+				case 1:
+					length = 80;
+					break;
+				case 2:
+					length = 130;
+					break;
+			}
+
+			var geometry = new THREE.BoxGeometry(length, 30, 20);
+			var material = new THREE.MeshPhongMaterial( {color: 0x994920} );
+
+			this.mesh = new THREE.Mesh(geometry, material);
+			this.mesh.position.z += 5;
+
+
+			if (direction == 0){
+				this.mesh.position.x += WIDTH/2;
+			}else{
+				this.mesh.position.x -= WIDTH/2;
+			}
+
+			this.boundingBox = new THREE.Box3().setFromObject(this.mesh);
+
+			this.update = function(){
+				if (direction == 0){
+					this.mesh.position.x -= INV_MAX_FPS * 50;
+				}else{	
+					this.mesh.position.x += INV_MAX_FPS * 50;
+				}
+				this.boundingBox.setFromObject(this.mesh);
+
+			}
+
+
+		}
+
+		function Player(){
+
+			var geometry = new THREE.BoxGeometry(20, 20, 20);
+			var material = new THREE.MeshPhongMaterial( {color: 0xf4dfc9} );
+
+			this.direction = 'NULL';
+			this.pos = Math.floor(WIDTH/TILEWIDTH/2);
+			this.backwardOffset = 0;
+			this.mesh = new THREE.Mesh(geometry, material);
+			this.mesh.position.z += 30;
+
+			this.boundingBox = new THREE.Box3().setFromObject(this.mesh);
+
+			var ray = new THREE.Ray(this.mesh.position, new THREE.Vector3(100, TILEWIDTH ,TILEWIDTH));
+			var rays = [new THREE.Ray(this.mesh.position, new THREE.Vector3(TILEWIDTH, 0 ,0)),
+						new THREE.Ray(this.mesh.position, new THREE.Vector3(0, TILEWIDTH ,0)),
+						new THREE.Ray(this.mesh.position, new THREE.Vector3(0, -TILEWIDTH ,0))];
+
+
+			this.update = function(){
+
+
+			if (!isDead){
+				if (this.direction == 'left'){
+
+					if (tiles[Math.floor(TILELIMIT/2) - this.backwardOffset ].trees[this.pos - 1] != true){
+						this.pos -= 1;
+					}
+
+				}
+				if (this.direction == 'right'){
+
+					if (tiles[Math.floor(TILELIMIT/2) - this.backwardOffset].trees[this.pos + 1] != true){
+						this.pos += 1;
+					}
+
+				}
+				if (this.direction == 'forward'){
+
+					blocker.style.display = 'none';
+
+					if (this.backwardOffset > 0){
+						this.backwardOffset -= 1;
+					}
+
+					if (this.mesh.position.y != 0){
+						this.mesh.position.y += TILEWIDTH;
+					}else{
+						score += 1;
+						if(tiles[Math.floor(TILELIMIT/2) + 1 - this.backwardOffset].type != 'WATER'){
+							if (tiles[Math.floor(TILELIMIT/2) + 1- this.backwardOffset ].trees[this.pos] != true){
+								addTile();
+							}
+						}else if (tiles[Math.floor(TILELIMIT/2)- this.backwardOffset ].type == 'WATER'){
+							if(!onLog[0]) isDead = true;
+							onLog[0]=false;
+							addTile();
+						}else{
+							addTile();
+						}
+					}
+				}
+
+				if (this.direction == 'backwards'){
+
+					if (tiles[Math.floor(TILELIMIT/2) - 1 - this.backwardOffset ].trees[this.pos] != true){
+						this.backwardOffset += 1;
+						this.mesh.position.y -= TILEWIDTH;
+
+						if (tiles[Math.floor(TILELIMIT/2) - this.backwardOffset ].type == 'WATER'){
+							onLog[0]=false;
+						}
+					}
+				}
+
+				if(tiles[Math.floor(TILELIMIT/2) + 1 - this.backwardOffset ].type != 'WATER'){
+
+					this.mesh.position.z = tiles[Math.floor(TILELIMIT/2)].height + 20/2;
+
+				}
+				if (tiles[Math.floor(TILELIMIT/2) - this.backwardOffset ].type == 'WATER'){
+
+					if(onLog[0] == true){
+
+						this.mesh.position.x = onLog[1].mesh.position.x;
+						this.pos = Math.round((this.mesh.position.x + WIDTH/2) / TILEWIDTH);
+
+					}
+				}else{
+
+					this.mesh.position.x = this.pos * TILEWIDTH - Math.floor(WIDTH/2) + TILEWIDTH/2;
+				}
+
+			}else{
+				this.mesh.geometry.scale(1, 1, 0.1);
+				this.mesh.position.z = tiles[Math.floor(TILELIMIT/2) - this.backwardOffset ].height + 2;
+			}
+
+			this.boundingBox.setFromObject(this.mesh);
+			this.direction = 'NULL';
+			}
+
+		}		
+
+
+		function initWorld(){
+
+			initStartTiles();
+
+			for (var i = 0; i < TILELIMIT - TILELIMIT/2 - 5; i++){
+				addTile();
+			}
+
+			player = new Player();
+			scene.add(player.mesh);
+		}
+
+
+		function onKeyDown(event) {
+			switch ( event.keyCode ) {
+				case 32: // space
+					player.direction = 'forward';
+					break;
+				case 65: // a
+					player.direction = 'left';
+					break;
+				case 68: // d
+					player.direction = 'right';
+					break;
+				case 83: // s
+					player.direction = 'backwards';
+					break;
+			}
+		}
+
+
+		function render(){
+
+			scene.rotation.y += ( targetRotationX - scene.rotation.y ) * 0.5;
+			scene.rotation.x += ( targetRotationY - scene.rotation.x ) * 0.5;
+
+			renderer.render(scene, camera);
+		}
+
+
+		function animate(){
+
+			requestAnimationFrame( animate );
+
+			delta += clock.getDelta();
+			while (delta >= INV_MAX_FPS){
+
+				for(var i = 0; i < tiles.length; i++){
+					tiles[i].update();
+				}
+
+				for (var i = 0; i < obstacles.length; i++){
+					obstacles[i].update();
+
+					if (player.boundingBox.intersectsBox(obstacles[i].boundingBox)){
+						isDead = true;
+					}
+
+				}
+
+				if (tiles[Math.floor(TILELIMIT/2)- player.backwardOffset].type == 'WATER'){
+
+					logs = tiles[Math.floor(TILELIMIT/2) - player.backwardOffset].logs;
+					for (var i = 0; i < logs.length; i++){
+						if (player.boundingBox.intersectsBox(logs[i].boundingBox)){
+							onLog[0] = true;
+							onLog[1] = logs[i]
+						}
+					}
+
+					if(onLog[0] == false){
+						isDead = true;
+					}
+
+				}else{
+					onLog[0] = false;
+				}
+
+				player.update();
+				//update(INV_MAX_FPS); // calculate physics
+				delta -= INV_MAX_FPS;
+			}
+
+			if (!isDead){
+				document.getElementById("score").innerHTML = "Score: " + score;
+			}else{
+				document.getElementById("score").innerHTML = "Dead :( " + score;
+			}
+
+
+			render();
+			camera.lookAt( scene.position );
+
+			
+		}
+
+			function onDocumentMouseDown( event ) {
+
+				event.preventDefault();
+
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'mouseup', onDocumentMouseUp, false );
+				document.addEventListener( 'mouseout', onDocumentMouseOut, false );
+
+				mouseXOnMouseDown = event.clientX - windowHalfX;
+				targetRotationOnMouseDownX = targetRotationX;
+				mouseYOnMouseDown = event.clientY - windowHalfY;
+				targetRotationOnMouseDownY = targetRotationY;
+
+			}
+
+			function onDocumentMouseMove( event ) {
+
+				mouseX = event.clientX - windowHalfX;
+				mouseY = event.clientY - windowHalfY;
+
+				targetRotationX = targetRotationOnMouseDownX + ( mouseX - mouseXOnMouseDown ) * 0.02;
+				targetRotationY = targetRotationOnMouseDownY + ( mouseY - mouseYOnMouseDown ) * 0.02;
+
+			}
+
+			function onDocumentMouseUp( event ) {
+
+				document.removeEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.removeEventListener( 'mouseup', onDocumentMouseUp, false );
+				document.removeEventListener( 'mouseout', onDocumentMouseOut, false );
+
+			}
+
+			function onDocumentMouseOut( event ) {
+
+				document.removeEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.removeEventListener( 'mouseup', onDocumentMouseUp, false );
+				document.removeEventListener( 'mouseout', onDocumentMouseOut, false );
+
+			}
+
+
+		</script>
+	</body>
+</html>
